@@ -14,14 +14,14 @@ const scheduleBlockSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const classSectionSchema = new mongoose.Schema(
+const departmentSchema = new mongoose.Schema(
   {
-    name: { type: String, required: [true, "Class name is required"], trim: true },
-    teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    students: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    name: { type: String, required: [true, "Department name is required"], trim: true },
+    manager: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    staff: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     schedule: { type: [scheduleBlockSchema], default: [] },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("ClassSection", classSectionSchema);
+module.exports = mongoose.model("Department", departmentSchema);

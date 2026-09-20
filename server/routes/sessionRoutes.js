@@ -2,34 +2,36 @@ const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
 const Session = require("../models/Session");
-const ClassSection = require("../models/ClassSection");
+const Department = require("../models/Department");
 const { protect, authorize } = require("../middleware/authMiddleware");
 
 const QR_VALID_MINUTES = 10;
 
-router.post("/", protect, authorize("teacher", "admin"), async (req, res) => {
+router.post("/", protect, authorize("manager", "hr"), async (req, res) => {
   try {
-    const { classSectionId } = req.body;
-    if (!classSectionId) {
-      return res.status(400).json({ message: "classSectionId is required" });
+    const { departmentId, lat, lng } = req.body;
+    if (!departmentId) {
+      return res.status(400).json({ message: "departmentId is required" });
     }
 
-    const classSection = await ClassSection.findById(classSectionId);
-    if (!classSection) return res.status(404).json({ message: "Class not found" });
+    const department = await Department.findById(departmentId);
+    if (!department) return res.status(404).json({ message: "Department not found" });
 
-    const isOwner = classSection.teacher.toString() === req.user._id.toString();
-    if (!isOwner && req.user.role !== "admin") {
-      return res.status(403).json({ message: "You don't teach this class" });
+    const isOwner = department.manager.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== "hr") {
+      return res.status(403).json({ message: "You don't manage this department" });
     }
 
     const qrToken = crypto.randomBytes(16).toString("hex");
     const qrExpiresAt = new Date(Date.now() + QR_VALID_MINUTES * 60 * 1000);
 
     const session = await Session.create({
-      classSection: classSectionId,
+      department: departmentId,
       date: new Date(),
       qrToken,
       qrExpiresAt,
+      location:
+        typeof lat === "number" && typeof lng === "number" ? { lat, lng } : { lat: null, lng: null },
     });
 
     res.status(201).json(session);
@@ -38,7 +40,7 @@ router.post("/", protect, authorize("teacher", "admin"), async (req, res) => {
   }
 });
 
-router.post("/:id/regenerate-qr", protect, authorize("teacher", "admin"), async (req, res) => {
+router.post("/:id/regenerate-qr", protect, authorize("manager", "hr"), async (req, res) => {
   try {
     const session = await Session.findById(req.params.id);
     if (!session) return res.status(404).json({ message: "Session not found" });
@@ -53,9 +55,9 @@ router.post("/:id/regenerate-qr", protect, authorize("teacher", "admin"), async 
   }
 });
 
-router.get("/class/:classId", protect, async (req, res) => {
+router.get("/department/:departmentId", protect, async (req, res) => {
   try {
-    const sessions = await Session.find({ classSection: req.params.classId }).sort({
+    const sessions = await Session.find({ department: req.params.departmentId }).sort({
       date: -1,
     });
     res.json(sessions);
@@ -66,7 +68,7 @@ router.get("/class/:classId", protect, async (req, res) => {
 
 router.get("/:id", protect, async (req, res) => {
   try {
-    const session = await Session.findById(req.params.id).populate("classSection", "name");
+    const session = await Session.findById(req.params.id).populate("department", "name");
     if (!session) return res.status(404).json({ message: "Session not found" });
     res.json(session);
   } catch (error) {

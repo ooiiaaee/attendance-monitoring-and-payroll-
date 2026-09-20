@@ -11,10 +11,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
     password: { type: String, required: [true, "Password is required"], minlength: 6 },
-    role: { type: String, enum: ["admin", "teacher", "student"], default: "student" },
-    studentId: { type: String, default: null },
-    // Teachers who self-register start as unapproved and can't log in until
-    // an admin approves them. Students and admin-created accounts skip this.
+    role: { type: String, enum: ["hr", "manager", "staff"], default: "staff" },
+    staffId: { type: String, default: null },
+    // Managers who self-register start as unapproved and cannot log in until
+    // an HR admin approves them. Staff and HR-created accounts skip this.
     approved: { type: Boolean, default: true },
   },
   { timestamps: true }

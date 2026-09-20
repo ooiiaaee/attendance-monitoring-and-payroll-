@@ -4,19 +4,21 @@ const router = express.Router();
 const User = require("../models/User");
 const generateToken = require("../utils/generateToken");
 const { protect, authorize } = require("../middleware/authMiddleware");
+const { sendEmail } = require("../utils/mailer");
+const { logAudit } = require("../utils/auditLog");
 
-// PUBLIC REGISTER — students log in immediately. Teachers are created as
-// unapproved and cannot log in until an admin approves them.
+// PUBLIC REGISTER — staff log in immediately. Managers are created as
+// unapproved and cannot log in until an HR admin approves them.
 router.post("/register", async (req, res) => {
   try {
-    const { name, email, password, role, studentId } = req.body;
+    const { name, email, password, role, staffId } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: "Name, email, and password are required" });
     }
 
-    if (role === "admin") {
-      return res.status(403).json({ message: "Admin accounts cannot be self-registered" });
+    if (role === "hr") {
+      return res.status(403).json({ message: "HR admin accounts cannot be self-registered" });
     }
 
     const existingUser = await User.findOne({ email });
@@ -26,23 +28,32 @@ router.post("/register", async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
-    const isTeacher = role === "teacher";
+    const isManager = role === "manager";
 
     const user = await User.create({
       name,
       email,
       password: hashedPassword,
-      role: role || "student",
-      studentId: studentId || null,
-      approved: !isTeacher, // teachers start unapproved; students are approved immediately
+      role: role || "staff",
+      staffId: staffId || null,
+      approved: !isManager, // managers start unapproved; staff are approved immediately
     });
 
-    if (isTeacher) {
-      // No token issued — they can't use the app until an admin approves them.
+    if (isManager) {
+      const hrAdmins = await User.find({ role: "hr" }).select("email");
+      hrAdmins.forEach((hr) => {
+        sendEmail({
+          to: hr.email,
+          subject: "A new manager account is awaiting approval",
+          text: `${name} (${email}) just registered as a manager and is waiting for approval before they can log in.`,
+        });
+      });
+
+      // No token issued — they can't use the app until an HR admin approves them.
       return res.status(201).json({
         pendingApproval: true,
         message:
-          "Your teacher account has been created and is pending admin approval. You'll be able to log in once approved.",
+          "Your manager account has been created and is pending HR admin approval. You'll be able to log in once approved.",
       });
     }
 
@@ -77,9 +88,9 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ message: "Invalid email or password" });
     }
 
-    if (user.role === "teacher" && !user.approved) {
+    if (user.role === "manager" && !user.approved) {
       return res.status(403).json({
-        message: "Your account is pending admin approval. Please check back later.",
+        message: "Your account is pending HR admin approval. Please check back later.",
       });
     }
 
@@ -101,7 +112,7 @@ router.get("/me", protect, async (req, res) => {
 });
 
 // UPDATE own name/email — any logged-in user. (Password self-change removed
-// on purpose — password resets now go through an admin only.)
+// on purpose — password resets now go through an HR admin only.)
 router.put("/me", protect, async (req, res) => {
   try {
     const { name, email } = req.body;
@@ -129,19 +140,19 @@ router.put("/me", protect, async (req, res) => {
   }
 });
 
-router.get("/students", protect, authorize("teacher", "admin"), async (req, res) => {
+router.get("/staff", protect, authorize("manager", "hr"), async (req, res) => {
   try {
-    const students = await User.find({ role: "student" }).select("name email studentId");
-    res.json(students);
+    const staffMembers = await User.find({ role: "staff" }).select("name email staffId");
+    res.json(staffMembers);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-router.get("/users", protect, authorize("admin"), async (req, res) => {
+router.get("/users", protect, authorize("hr"), async (req, res) => {
   try {
     const users = await User.find()
-      .select("name email role studentId approved createdAt")
+      .select("name email role staffId approved createdAt")
       .sort({ createdAt: -1 });
     res.json(users);
   } catch (error) {
@@ -149,10 +160,10 @@ router.get("/users", protect, authorize("admin"), async (req, res) => {
   }
 });
 
-// Admin-created accounts are always pre-approved, whatever the role.
-router.post("/users", protect, authorize("admin"), async (req, res) => {
+// HR-created accounts are always pre-approved, whatever the role.
+router.post("/users", protect, authorize("hr"), async (req, res) => {
   try {
-    const { name, email, password, role, studentId } = req.body;
+    const { name, email, password, role, staffId } = req.body;
 
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: "Name, email, password, and role are required" });
@@ -171,7 +182,7 @@ router.post("/users", protect, authorize("admin"), async (req, res) => {
       email,
       password: hashedPassword,
       role,
-      studentId: role === "student" ? studentId || null : null,
+      staffId: role === "staff" ? staffId || null : null,
       approved: true,
     });
 
@@ -180,7 +191,7 @@ router.post("/users", protect, authorize("admin"), async (req, res) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      studentId: user.studentId,
+      staffId: user.staffId,
       approved: user.approved,
     });
   } catch (error) {
@@ -188,8 +199,8 @@ router.post("/users", protect, authorize("admin"), async (req, res) => {
   }
 });
 
-// Admin approves a pending teacher account
-router.put("/users/:id/approve", protect, authorize("admin"), async (req, res) => {
+// HR admin approves a pending manager account
+router.put("/users/:id/approve", protect, authorize("hr"), async (req, res) => {
   try {
     const user = await User.findByIdAndUpdate(
       req.params.id,
@@ -197,15 +208,24 @@ router.put("/users/:id/approve", protect, authorize("admin"), async (req, res) =
       { new: true }
     ).select("-password");
     if (!user) return res.status(404).json({ message: "User not found" });
+
+    sendEmail({
+      to: user.email,
+      subject: "Your manager account has been approved",
+      text: `Hi ${user.name},\n\nYour manager account has been approved by HR. You can now log in and start using the app.`,
+    });
+
+    await logAudit(req.user._id, "user.approve", "User", user._id, `Approved manager account: ${user.email}`);
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-// Admin resets any user's password directly — the only password-reset path
+// HR admin resets any user's password directly — the only password-reset path
 // in the app now. There is no self-service "change password" anymore.
-router.put("/users/:id/reset-password", protect, authorize("admin"), async (req, res) => {
+router.put("/users/:id/reset-password", protect, authorize("hr"), async (req, res) => {
   try {
     const { newPassword } = req.body;
     if (!newPassword || newPassword.length < 6) {
@@ -219,19 +239,46 @@ router.put("/users/:id/reset-password", protect, authorize("admin"), async (req,
     user.password = await bcrypt.hash(newPassword, salt);
     await user.save();
 
+    sendEmail({
+      to: user.email,
+      subject: "Your password was reset by an HR admin",
+      text: `Hi ${user.name},\n\nAn HR admin just reset your password. If you weren't expecting this, contact HR right away.`,
+    });
+
+    await logAudit(req.user._id, "user.reset_password", "User", user._id, `Reset password for: ${user.email}`);
+
     res.json({ message: `Password reset for ${user.email}` });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
 
-router.delete("/users/:id", protect, authorize("admin"), async (req, res) => {
+router.delete("/users/:id", protect, authorize("hr"), async (req, res) => {
   try {
     if (req.params.id === req.user._id.toString()) {
       return res.status(400).json({ message: "You can't delete your own account" });
     }
-    const deleted = await User.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "User not found" });
+
+    const target = await User.findById(req.params.id);
+    if (!target) return res.status(404).json({ message: "User not found" });
+
+    // HR admin accounts can never be deleted from the panel, even by another
+    // HR admin. If an HR account genuinely needs to go, do it manually in
+    // the database.
+    if (target.role === "hr") {
+      return res.status(403).json({ message: "HR admin accounts cannot be deleted" });
+    }
+
+    await User.findByIdAndDelete(req.params.id);
+
+    await logAudit(
+      req.user._id,
+      "user.delete",
+      "User",
+      target._id,
+      `Deleted ${target.role} account: ${target.email}`
+    );
+
     res.json({ message: "User deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
