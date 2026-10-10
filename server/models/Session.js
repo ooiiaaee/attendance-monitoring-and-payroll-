@@ -4,7 +4,7 @@ const sessionSchema = new mongoose.Schema(
   {
     department: { type: mongoose.Schema.Types.ObjectId, ref: "Department", required: true },
     date: { type: Date, default: Date.now },
-    qrToken: { type: String, required: true },
+    qrToken: { type: String, required: true, unique: true },
     qrExpiresAt: { type: Date, required: true },
     // Captured from the manager's device when the session is started. Used
     // to flag check-ins that happen from somewhere else entirely.
@@ -18,6 +18,11 @@ const sessionSchema = new mongoose.Schema(
     // The schedule block's start time ("HH:MM") this session was generated
     // for — used to avoid creating a duplicate for the same block/day.
     scheduleStartTime: { type: String, default: null },
+    // Soft-delete flag, same pattern as User/Department.isActive. Nothing in
+    // the current routes actually sets this to false yet (there's no
+    // "delete a session" endpoint), but it's here so history stays intact
+    // if that need comes up rather than requiring a hard delete later.
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

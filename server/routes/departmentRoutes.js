@@ -1,15 +1,46 @@
 const express = require("express");
+const { z } = require("zod");
 const router = express.Router();
 const Department = require("../models/Department");
 const Session = require("../models/Session");
 const AttendanceRecord = require("../models/AttendanceRecord");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const { logAudit } = require("../utils/auditLog");
+const asyncHandler = require("../utils/asyncHandler");
+const validate = require("../middleware/validate");
 
-router.post("/", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+const scheduleBlockSchema = z.object({
+  day: z.enum(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/, "startTime must be HH:MM"),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/, "endTime must be HH:MM"),
+});
+
+const createDepartmentSchema = z.object({
+  name: z.string().trim().min(1, "Department name is required"),
+  schedule: z.array(scheduleBlockSchema).optional(),
+});
+
+const updateDepartmentSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  schedule: z.array(scheduleBlockSchema).optional(),
+});
+
+const enrollSchema = z.object({
+  staffId: z.string().min(1, "staffId is required"),
+});
+
+// Only used internally by AttendanceRecord queries below — excludes
+// soft-deleted (corrected/removed) records from every roll-up, same
+// $ne:false reasoning as everywhere else this pattern is used.
+const ACTIVE_RECORD = { isActive: { $ne: false } };
+
+router.post(
+  "/",
+  protect,
+  authorize("manager", "hr"),
+  validate(createDepartmentSchema),
+  asyncHandler(async (req, res) => {
     const { name, schedule } = req.body;
-    if (!name) return res.status(400).json({ message: "Department name is required" });
 
     const newDepartment = await Department.create({
       name,
@@ -19,57 +50,71 @@ router.post("/", protect, authorize("manager", "hr"), async (req, res) => {
     });
 
     res.status(201).json(newDepartment);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-router.get("/", protect, async (req, res) => {
-  try {
+router.get(
+  "/",
+  protect,
+  asyncHandler(async (req, res) => {
     let query = {};
     if (req.user.role === "manager") {
-      query = { manager: req.user._id };
+      query = { manager: req.user._id, isActive: { $ne: false } };
     } else if (req.user.role === "staff") {
-      query = { staff: req.user._id };
+      query = { staff: req.user._id, isActive: { $ne: false } };
     }
+    // HR gets no isActive filter at all — same as GET /auth/users — so
+    // deactivated departments still show up in the Admin Panel to be
+    // reactivated, they just disappear from managers'/staff's own views.
 
     const departments = await Department.find(query)
       .populate("manager", "name email")
       .populate("staff", "name email staffId");
 
     res.json(departments);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-router.get("/:id", protect, async (req, res) => {
-  try {
+router.get(
+  "/:id",
+  protect,
+  asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id)
       .populate("manager", "name email")
       .populate("staff", "name email staffId");
 
     if (!department) return res.status(404).json({ message: "Department not found" });
     res.json(department);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // GET attendance-rate summary per staff member — powers low-attendance alerts
-router.get("/:id/summary", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.get(
+  "/:id/summary",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id).populate(
       "staff",
       "name email staffId"
     );
     if (!department) return res.status(404).json({ message: "Department not found" });
 
+    // This was previously missing — any manager (not just this department's
+    // own) could pull another department's full attendance summary.
+    const isOwner = department.manager?.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== "hr") {
+      return res.status(403).json({ message: "You don't manage this department" });
+    }
+
     const sessions = await Session.find({ department: req.params.id });
     const sessionIds = sessions.map((s) => s._id);
     const totalSessions = sessions.length;
 
-    const records = await AttendanceRecord.find({ session: { $in: sessionIds } });
+    const records = await AttendanceRecord.find({
+      session: { $in: sessionIds },
+      ...ACTIVE_RECORD,
+    });
 
     const summary = department.staff.map((staffMember) => {
       const staffRecords = records.filter(
@@ -94,32 +139,33 @@ router.get("/:id/summary", protect, authorize("manager", "hr"), async (req, res)
     });
 
     res.json({ departmentName: department.name, totalSessions, summary });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // GET session-by-session attendance trend + full history — powers the
 // analytics chart and the "export full history" CSV on the department page.
-router.get("/:id/analytics", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.get(
+  "/:id/analytics",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id).populate(
       "staff",
       "name email staffId"
     );
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    const isOwner = department.manager.toString() === req.user._id.toString();
+    const isOwner = department.manager?.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
     }
 
     const sessions = await Session.find({ department: req.params.id }).sort({ date: 1 });
     const sessionIds = sessions.map((s) => s._id);
-    const records = await AttendanceRecord.find({ session: { $in: sessionIds } }).populate(
-      "staff",
-      "name email staffId"
-    );
+    const records = await AttendanceRecord.find({
+      session: { $in: sessionIds },
+      ...ACTIVE_RECORD,
+    }).populate("staff", "name email staffId");
 
     const totalStaff = department.staff.length;
 
@@ -164,22 +210,23 @@ router.get("/:id/analytics", protect, authorize("manager", "hr"), async (req, re
       .sort((a, b) => new Date(a.date) - new Date(b.date));
 
     res.json({ departmentName: department.name, totalStaff, trend, fullHistory });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // GET total hours worked per staff member within a date range — a
 // payroll-ready summary, not per-session detail.
-router.get("/:id/payroll", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.get(
+  "/:id/payroll",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id).populate(
       "staff",
       "name email staffId"
     );
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    const isOwner = department.manager.toString() === req.user._id.toString();
+    const isOwner = department.manager?.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
     }
@@ -205,14 +252,22 @@ router.get("/:id/payroll", protect, authorize("manager", "hr"), async (req, res)
     });
     const sessionIds = sessions.map((s) => s._id);
 
-    const records = await AttendanceRecord.find({ session: { $in: sessionIds } });
+    const records = await AttendanceRecord.find({
+      session: { $in: sessionIds },
+      ...ACTIVE_RECORD,
+    });
 
     const payroll = department.staff.map((staffMember) => {
       const staffRecords = records.filter(
         (r) => r.staff.toString() === staffMember._id.toString()
       );
-      const totalHours = staffRecords.reduce((sum, r) => sum + (r.hoursWorked || 0), 0);
-      const sessionsWorked = staffRecords.filter((r) => r.hoursWorked != null).length;
+      // Absent/excused records never count as hours worked (older records may
+      // still carry hours from before this rule existed).
+      const workedRecords = staffRecords.filter(
+        (r) => r.status !== "absent" && r.status !== "excused"
+      );
+      const totalHours = workedRecords.reduce((sum, r) => sum + (r.hoursWorked || 0), 0);
+      const sessionsWorked = workedRecords.filter((r) => r.hoursWorked != null).length;
 
       return {
         staff: {
@@ -233,38 +288,70 @@ router.get("/:id/payroll", protect, authorize("manager", "hr"), async (req, res)
       totalSessions: sessions.length,
       payroll,
     });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-router.post("/:id/enroll", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.post(
+  "/:id/enroll",
+  protect,
+  authorize("manager", "hr"),
+  validate(enrollSchema),
+  asyncHandler(async (req, res) => {
     const { staffId } = req.body;
     const department = await Department.findById(req.params.id);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
+    // This was previously missing — any manager could enroll staff into any
+    // department, not just their own.
+    const isOwner = department.manager?.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== "hr") {
+      return res.status(403).json({ message: "You don't manage this department" });
+    }
+
+    if (!department.isActive) {
+      return res.status(400).json({ message: "This department has been deactivated" });
+    }
+
     if (department.staff.includes(staffId)) {
       return res.status(400).json({ message: "Staff member is already assigned" });
+    }
+
+    // A staff member can belong to only ONE department at a time. Departments
+    // that have been deactivated don't count — those staff are free again.
+    const otherDepartment = await Department.findOne({
+      _id: { $ne: department._id },
+      isActive: { $ne: false },
+      staff: staffId,
+    }).select("name");
+    if (otherDepartment) {
+      return res.status(400).json({
+        message: `This staff member is already enrolled in "${otherDepartment.name}". A staff member can only belong to one department.`,
+      });
     }
 
     department.staff.push(staffId);
     await department.save();
 
     res.json(department);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-router.put("/:id", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.put(
+  "/:id",
+  protect,
+  authorize("manager", "hr"),
+  validate(updateDepartmentSchema),
+  asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    const isOwner = department.manager.toString() === req.user._id.toString();
+    const isOwner = department.manager?.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
+    }
+
+    if (!department.isActive) {
+      return res.status(400).json({ message: "This department has been deactivated" });
     }
 
     const { name, schedule } = req.body;
@@ -273,28 +360,68 @@ router.put("/:id", protect, authorize("manager", "hr"), async (req, res) => {
     await department.save();
 
     res.json(department);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-router.delete("/:id", protect, authorize("hr"), async (req, res) => {
-  try {
-    const deleted = await Department.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Department not found" });
+// Soft delete — mirrors the User.isActive pattern. Sets isActive: false
+// instead of removing the document, so every historical reference to this
+// department (sessions, attendance records, leave requests, and the
+// department's own staff/manager assignments) stays intact and still
+// resolves correctly when populated. It just disappears from managers' and
+// staff's own department views (see GET / above) and can't be modified
+// further (see the enroll/update guards above) until reactivated.
+router.delete(
+  "/:id",
+  protect,
+  authorize("hr"),
+  asyncHandler(async (req, res) => {
+    const department = await Department.findById(req.params.id);
+    if (!department) return res.status(404).json({ message: "Department not found" });
+
+    if (!department.isActive) {
+      return res.status(400).json({ message: "This department is already deactivated" });
+    }
+
+    department.isActive = false;
+    await department.save();
 
     await logAudit(
       req.user._id,
-      "department.delete",
+      "department.deactivate",
       "Department",
-      deleted._id,
-      `Deleted department: ${deleted.name}`
+      department._id,
+      `Deactivated department: ${department.name}`
     );
 
-    res.json({ message: "Department deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+    res.json({ message: "Department deactivated successfully" });
+  })
+);
+
+router.put(
+  "/:id/reactivate",
+  protect,
+  authorize("hr"),
+  asyncHandler(async (req, res) => {
+    const department = await Department.findById(req.params.id);
+    if (!department) return res.status(404).json({ message: "Department not found" });
+
+    if (department.isActive) {
+      return res.status(400).json({ message: "This department is already active" });
+    }
+
+    department.isActive = true;
+    await department.save();
+
+    await logAudit(
+      req.user._id,
+      "department.reactivate",
+      "Department",
+      department._id,
+      `Reactivated department: ${department.name}`
+    );
+
+    res.json({ message: "Department reactivated successfully" });
+  })
+);
 
 module.exports = router;

@@ -19,6 +19,12 @@ const protect = async (req, res, next) => {
     if (!req.user) {
       return res.status(401).json({ message: "User no longer exists" });
     }
+    if (!req.user.isActive) {
+      return res.status(401).json({ message: "This account has been deactivated" });
+    }
+    if (decoded.tokenVersion !== req.user.tokenVersion) {
+      return res.status(401).json({ message: "Your session has expired. Please log in again." });
+    }
     next();
   } catch (error) {
     return res.status(401).json({ message: "Not authorized, token invalid" });

@@ -20,6 +20,11 @@ const departmentSchema = new mongoose.Schema(
     manager: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     staff: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     schedule: { type: [scheduleBlockSchema], default: [] },
+    // Soft-delete flag, same pattern as User.isActive. "Deleting" a
+    // department from the Admin Panel just flips this to false — the
+    // document (and every historical reference to it: sessions, attendance
+    // records, leave requests) stays intact and still resolves correctly.
+    isActive: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

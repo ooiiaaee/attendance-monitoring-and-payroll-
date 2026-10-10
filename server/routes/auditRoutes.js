@@ -2,11 +2,15 @@ const express = require("express");
 const router = express.Router();
 const AuditLog = require("../models/AuditLog");
 const { protect, authorize } = require("../middleware/authMiddleware");
+const asyncHandler = require("../utils/asyncHandler");
 
 // GET the audit trail — HR only. Supports optional filtering by action or
 // target type, and simple pagination.
-router.get("/", protect, authorize("hr"), async (req, res) => {
-  try {
+router.get(
+  "/",
+  protect,
+  authorize("hr"),
+  asyncHandler(async (req, res) => {
     const { action, targetType, limit = 100, page = 1 } = req.query;
 
     const query = {};
@@ -22,9 +26,7 @@ router.get("/", protect, authorize("hr"), async (req, res) => {
     const total = await AuditLog.countDocuments(query);
 
     res.json({ entries, total, page: Number(page), limit: Number(limit) });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 module.exports = router;

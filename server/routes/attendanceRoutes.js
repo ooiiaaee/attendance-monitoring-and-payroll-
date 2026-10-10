@@ -1,10 +1,20 @@
 const express = require("express");
+const { z } = require("zod");
 const router = express.Router();
+
+// Absent and excused staff didn't clock in, so they have no check-in time,
+// check-out time or hours.
+const NO_SHOW = ["absent", "excused"];
+const isNoShow = (status) => NO_SHOW.includes(status);
+
 const AttendanceRecord = require("../models/AttendanceRecord");
 const Session = require("../models/Session");
 const Department = require("../models/Department");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const { distanceMeters } = require("../utils/geo");
+const asyncHandler = require("../utils/asyncHandler");
+const validate = require("../middleware/validate");
+const { checkinLimiter } = require("../middleware/rateLimiters");
 
 // A check-in further than this from where the session was started gets
 // flagged for the manager to review, rather than being blocked outright —
@@ -12,11 +22,54 @@ const { distanceMeters } = require("../utils/geo");
 // too many false rejections.
 const CHECKIN_RADIUS_METERS = 150;
 
+const checkinSchema = z.object({
+  qrToken: z.string().min(1, "qrToken is required"),
+  lat: z.number().optional(),
+  lng: z.number().optional(),
+});
+
+const manualSchema = z.object({
+  sessionId: z.string().min(1),
+  staffId: z.string().min(1),
+  status: z.enum(["present", "late", "absent", "excused"]),
+});
+
+// Only used internally by the queries below — excludes soft-deleted
+// (corrected/removed) records, same $ne:false reasoning used everywhere
+// else this pattern appears.
+const ACTIVE_RECORD = { isActive: { $ne: false } };
+
+// Shared by /manual, /:id/checkout, and DELETE /:id — confirms the
+// requesting manager actually manages the department the session (and
+// therefore the attendance record) belongs to. HR can act on any record.
+async function assertManagesSession(sessionId, user) {
+  const session = await Session.findById(sessionId);
+  if (!session) {
+    const err = new Error("Session not found");
+    err.statusCode = 404;
+    throw err;
+  }
+  if (user.role !== "hr") {
+    const department = await Department.findById(session.department);
+    const isOwner = department?.manager?.toString() === user._id.toString();
+    if (!isOwner) {
+      const err = new Error("You don't manage this department");
+      err.statusCode = 403;
+      throw err;
+    }
+  }
+  return session;
+}
+
 // STAFF CHECK-IN via QR scan
-router.post("/checkin", protect, authorize("staff"), async (req, res) => {
-  try {
+router.post(
+  "/checkin",
+  protect,
+  authorize("staff"),
+  checkinLimiter,
+  validate(checkinSchema),
+  asyncHandler(async (req, res) => {
     const { qrToken, lat, lng } = req.body;
-    if (!qrToken) return res.status(400).json({ message: "qrToken is required" });
 
     const session = await Session.findOne({ qrToken });
     if (!session) return res.status(404).json({ message: "Invalid QR code" });
@@ -62,6 +115,22 @@ router.post("/checkin", protect, authorize("staff"), async (req, res) => {
       staff: req.user._id,
     });
 
+    // Marked absent/excused by a manager, but then actually showed up and
+    // scanned: that's a check-in, not a check-out.
+    if (existing && isNoShow(existing.status)) {
+      existing.status = "present";
+      existing.timestamp = new Date();
+      existing.checkOutTime = null;
+      existing.hoursWorked = null;
+      existing.location = location;
+      existing.distanceMeters = distance;
+      existing.flagged = flagged;
+      existing.flagReason = flagReason;
+      await existing.save();
+
+      return res.json({ ...existing.toObject(), type: "checkin" });
+    }
+
     // A second scan of the same session's QR is treated as check-out.
     if (existing) {
       if (existing.checkOutTime) {
@@ -88,38 +157,79 @@ router.post("/checkin", protect, authorize("staff"), async (req, res) => {
     });
 
     res.status(201).json({ ...record.toObject(), type: "checkin" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // MANAGER/HR manual override — mark a staff member's status directly
-router.post("/manual", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.post(
+  "/manual",
+  protect,
+  authorize("manager", "hr"),
+  validate(manualSchema),
+  asyncHandler(async (req, res) => {
     const { sessionId, staffId, status } = req.body;
-    if (!sessionId || !staffId || !status) {
-      return res.status(400).json({ message: "sessionId, staffId, and status are required" });
+
+    // This ownership check was previously missing — any manager could mark
+    // attendance for any session, including ones belonging to a department
+    // they don't manage.
+    await assertManagesSession(sessionId, req.user);
+
+    // The check-in time is only set when the record is first created.
+    // Re-clicking a status button used to overwrite it with "now", which
+    // pushed check-in past an existing check-out time and made later
+    // check-out edits fail with "can't be before check-in".
+    const existing = await AttendanceRecord.findOne({ session: sessionId, staff: staffId });
+    const wasNoShow = existing && isNoShow(existing.status);
+
+    const update = { $set: { status } };
+    if (isNoShow(status)) {
+      // Absent / excused: no times, no hours.
+      update.$set.checkOutTime = null;
+      update.$set.hoursWorked = null;
+    } else if (wasNoShow) {
+      // Changing absent/excused -> present/late: they have no real check-in
+      // yet, so start a fresh one now (editable with the pencil on the roster).
+      update.$set.timestamp = new Date();
+      update.$set.checkOutTime = null;
+      update.$set.hoursWorked = null;
     }
+    // Brand-new record: stamp it (the timestamp field is internal for absent /
+    // excused records — the UI hides it). Never combined with the $set
+    // timestamp above, which only happens when a record already exists.
+    if (!existing) update.$setOnInsert = { timestamp: new Date() };
 
     const record = await AttendanceRecord.findOneAndUpdate(
       { session: sessionId, staff: staffId },
-      { status, timestamp: new Date() },
+      update,
       { upsert: true, new: true, runValidators: true }
     );
 
     res.json(record);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // MANAGER/HR manually sets (or corrects) a check-out time
-router.put("/:id/checkout", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
+router.put(
+  "/:id/checkout",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
     const record = await AttendanceRecord.findById(req.params.id);
     if (!record) return res.status(404).json({ message: "Record not found" });
 
+    // Previously missing — see assertManagesSession above.
+    await assertManagesSession(record.session, req.user);
+
+    if (isNoShow(record.status)) {
+      return res.status(400).json({
+        message: "Absent or excused staff have no check-in/check-out times. Mark them present or late first.",
+      });
+    }
+
     const checkOutTime = req.body.checkOutTime ? new Date(req.body.checkOutTime) : new Date();
+    if (isNaN(checkOutTime.getTime())) {
+      return res.status(400).json({ message: "That's not a valid check-out time" });
+    }
     if (checkOutTime < record.timestamp) {
       return res.status(400).json({ message: "Check-out time can't be before check-in time" });
     }
@@ -129,50 +239,130 @@ router.put("/:id/checkout", protect, authorize("manager", "hr"), async (req, res
     await record.save();
 
     res.json(record);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
-// MANAGER/HR removes a record — useful for corrections or clearing a test check-in
-router.delete("/:id", protect, authorize("manager", "hr"), async (req, res) => {
-  try {
-    const deleted = await AttendanceRecord.findByIdAndDelete(req.params.id);
-    if (!deleted) return res.status(404).json({ message: "Record not found" });
+// MANAGER/HR corrects check-in and/or check-out times (full date + time).
+// Send checkInTime and/or checkOutTime as ISO strings; checkOutTime may be
+// null to clear it. Hours are recalculated from whatever the result is.
+const timesSchema = z
+  .object({
+    checkInTime: z.string().min(1).optional(),
+    checkOutTime: z.string().min(1).nullable().optional(),
+  })
+  .refine((b) => b.checkInTime !== undefined || b.checkOutTime !== undefined, {
+    message: "Provide a check-in and/or check-out time",
+  });
+
+router.put(
+  "/:id/times",
+  protect,
+  authorize("manager", "hr"),
+  validate(timesSchema),
+  asyncHandler(async (req, res) => {
+    const record = await AttendanceRecord.findById(req.params.id);
+    if (!record) return res.status(404).json({ message: "Record not found" });
+
+    await assertManagesSession(record.session, req.user);
+
+    if (isNoShow(record.status)) {
+      return res.status(400).json({
+        message: "Absent or excused staff have no check-in/check-out times. Mark them present or late first.",
+      });
+    }
+
+    const { checkInTime, checkOutTime } = req.body;
+
+    let newIn = record.timestamp;
+    if (checkInTime !== undefined) {
+      newIn = new Date(checkInTime);
+      if (isNaN(newIn.getTime())) {
+        return res.status(400).json({ message: "That's not a valid check-in time" });
+      }
+    }
+
+    let newOut = record.checkOutTime;
+    if (checkOutTime !== undefined) {
+      if (checkOutTime === null) {
+        newOut = null;
+      } else {
+        newOut = new Date(checkOutTime);
+        if (isNaN(newOut.getTime())) {
+          return res.status(400).json({ message: "That's not a valid check-out time" });
+        }
+      }
+    }
+
+    if (newOut && newOut < newIn) {
+      return res.status(400).json({ message: "Check-out time can't be before check-in time" });
+    }
+
+    record.timestamp = newIn;
+    record.checkOutTime = newOut;
+    record.hoursWorked = newOut ? Math.round(((newOut - newIn) / 3600000) * 100) / 100 : null;
+    await record.save();
+
+    res.json(record);
+  })
+);
+
+// MANAGER/HR removes a record — useful for corrections or clearing a test
+// check-in. Soft delete: sets isActive: false instead of removing the
+// document, so it drops out of rosters/history/payroll (see the isActive
+// filters below and in departmentRoutes.js) without leaving any other
+// reference dangling.
+router.delete(
+  "/:id",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
+    const record = await AttendanceRecord.findById(req.params.id);
+    if (!record) return res.status(404).json({ message: "Record not found" });
+
+    // Previously missing — see assertManagesSession above.
+    await assertManagesSession(record.session, req.user);
+
+    record.isActive = false;
+    await record.save();
+
     res.json({ message: "Attendance record removed" });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // GET attendance records for a specific session (manager's roster view)
-router.get("/session/:sessionId", protect, async (req, res) => {
-  try {
-    const records = await AttendanceRecord.find({ session: req.params.sessionId }).populate(
-      "staff",
-      "name email staffId"
-    );
+router.get(
+  "/session/:sessionId",
+  protect,
+  authorize("manager", "hr"),
+  asyncHandler(async (req, res) => {
+    // Previously this had no ownership check at all, and no role
+    // restriction beyond being logged in — any authenticated user could
+    // pull the full roster for any session in any department.
+    await assertManagesSession(req.params.sessionId, req.user);
+
+    const records = await AttendanceRecord.find({
+      session: req.params.sessionId,
+      ...ACTIVE_RECORD,
+    }).populate("staff", "name email staffId");
     res.json(records);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 // GET a staff member's own attendance history
-router.get("/staff/:staffId", protect, async (req, res) => {
-  try {
+router.get(
+  "/staff/:staffId",
+  protect,
+  asyncHandler(async (req, res) => {
     if (req.user.role === "staff" && req.user._id.toString() !== req.params.staffId) {
       return res.status(403).json({ message: "You can only view your own attendance" });
     }
 
-    const records = await AttendanceRecord.find({ staff: req.params.staffId })
+    const records = await AttendanceRecord.find({ staff: req.params.staffId, ...ACTIVE_RECORD })
       .populate({ path: "session", populate: { path: "department", select: "name" } })
       .sort({ timestamp: -1 });
 
     res.json(records);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+  })
+);
 
 module.exports = router;

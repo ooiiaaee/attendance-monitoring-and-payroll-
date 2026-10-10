@@ -21,7 +21,11 @@ async function generateDueSessions() {
     now.getMinutes()
   ).padStart(2, "0")}`;
 
-  const departments = await Department.find({});
+  // isActive: {$ne:false} — see authRoutes.js for why this isn't isActive:true.
+  // Without this, a deactivated department would keep getting fresh
+  // sessions auto-created for it forever, undoing the point of deactivating
+  // it in the first place.
+  const departments = await Department.find({ isActive: { $ne: false } });
 
   for (const dept of departments) {
     const dueBlock = (dept.schedule || []).find(
@@ -75,7 +79,7 @@ async function catchUpMissedSessions() {
   const endOfDay = new Date(now);
   endOfDay.setHours(23, 59, 59, 999);
 
-  const departments = await Department.find({});
+  const departments = await Department.find({ isActive: { $ne: false } });
 
   for (const dept of departments) {
     const dueTodayBlocks = (dept.schedule || []).filter(
