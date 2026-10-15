@@ -1,0 +1,51 @@
+.history-table-wrapper {
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.history-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-table td {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.history-table tbody tr:hover {
+  background: var(--bg);
+}
+
+.history-department-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.history-date,
+.history-time {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* .status-badge styles are in shared.css */
+
+@media (max-width: 768px) {
+  .page-shell {
+    margin-left: 64px;
+    padding: 24px 20px;
+  }
+}

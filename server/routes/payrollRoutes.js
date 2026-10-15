@@ -25,9 +25,7 @@ const updatePaymentSchema = z.object({
   note: z.string().trim().max(500).optional(),
 });
 
-// Confirms the requesting manager actually manages this department (HR can
-// act on any department), and that the given staff member is actually part
-// of it — either enrolled staff or the department's own manager.
+// Checks the manager owns the department and the staff member belongs to it (HR can access any)
 async function assertCanRecordPayment(departmentId, staffId, user) {
   const department = await Department.findById(departmentId);
   if (!department) {
@@ -90,9 +88,7 @@ router.post(
   })
 );
 
-// List payments for a department, with totals/stats, within an optional
-// date range (filtered by paidAt — when the payment was actually recorded,
-// not the period it covers).
+// List payments with totals, filtered by paidAt date range
 router.get(
   "/department/:departmentId",
   protect,
@@ -104,10 +100,7 @@ router.get(
     );
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    // populate("manager") gives null if that user record no longer exists
-    // (e.g. removed straight from the database). Calling ._id on null used to
-    // crash this whole report with a 500, so treat it as "no owner" — HR can
-    // still view it.
+    // manager is null if the user was removed
     const isOwner = !!department.manager && department.manager._id.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
@@ -126,10 +119,7 @@ router.get(
       .populate("paidBy", "name")
       .sort({ paidAt: -1 });
 
-    // A payment whose staff user no longer exists comes back with staff: null,
-    // which crashed both this handler and the page that renders it. Keep the
-    // payment (the money was still paid and belongs in the totals) but show it
-    // as a placeholder person instead.
+    // staff is null if the user was removed; show a placeholder
     const DELETED_STAFF = { _id: "deleted-user", name: "Deleted user", email: "", staffId: null };
     const payments = found.map((doc) => {
       const p = doc.toObject();
@@ -197,7 +187,7 @@ router.put(
   })
 );
 
-// Soft delete — corrections stay visible in history rather than vanishing.
+// Soft delete
 router.delete(
   "/:id",
   protect,

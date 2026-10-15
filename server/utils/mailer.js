@@ -1,8 +1,6 @@
 const nodemailer = require("nodemailer");
 
-// If SMTP isn't configured yet, every send just logs and resolves — nothing
-// in the app breaks because email hasn't been set up. Works with Gmail,
-// SendGrid SMTP, Mailtrap, or any standard SMTP provider.
+// Logs instead of sending if SMTP isn't configured
 const isConfigured =
   process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS;
 
@@ -21,10 +19,7 @@ if (isConfigured) {
 
 const FROM = process.env.SMTP_FROM || "Attendance <no-reply@company.com>";
 
-/**
- * Sends an email. Silently logs instead of sending if SMTP isn't configured
- * — callers never need to check whether email is set up.
- */
+// Sends an email; logs instead if SMTP isn't configured
 async function sendEmail({ to, subject, text, html }) {
   if (!to) return;
 
@@ -36,7 +31,7 @@ async function sendEmail({ to, subject, text, html }) {
   try {
     await transporter.sendMail({ from: FROM, to, subject, text, html: html || text });
   } catch (error) {
-    // Email failures should never break the request that triggered them.
+    // Email failures shouldn't break the request
     console.error("[mailer] Failed to send email:", error.message);
   }
 }

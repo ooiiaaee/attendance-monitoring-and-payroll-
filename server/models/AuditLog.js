@@ -11,7 +11,7 @@ const auditLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Most-recent-first is the only access pattern for this collection.
+// Newest first
 auditLogSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);

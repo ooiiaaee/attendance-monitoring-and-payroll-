@@ -27,7 +27,7 @@ router.post(
       status: "pending",
     });
 
-    // Notify the department's manager that a request is waiting on them.
+    // Notify the department's manager
     const dept = await Department.findById(department).populate("manager", "name email");
     if (dept?.manager?.email) {
       sendEmail({

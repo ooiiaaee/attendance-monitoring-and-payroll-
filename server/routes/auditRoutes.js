@@ -4,8 +4,7 @@ const AuditLog = require("../models/AuditLog");
 const { protect, authorize } = require("../middleware/authMiddleware");
 const asyncHandler = require("../utils/asyncHandler");
 
-// GET the audit trail — HR only. Supports optional filtering by action or
-// target type, and simple pagination.
+// Audit trail (HR only), with optional filters and pagination
 router.get(
   "/",
   protect,

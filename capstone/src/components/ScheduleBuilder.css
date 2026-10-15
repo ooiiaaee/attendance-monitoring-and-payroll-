@@ -1,0 +1,89 @@
+.schedule-builder {
+  margin-top: 4px;
+}
+
+.sb-day-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.sb-day-btn {
+  flex: 1;
+  padding: 8px 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.sb-day-btn:hover {
+  border-color: var(--accent);
+}
+
+.sb-day-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.sb-time-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.sb-time-row select {
+  flex: 1;
+}
+
+.sb-time-sep {
+  font-size: 12.5px;
+  color: var(--text-faint);
+}
+
+.sb-add-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sb-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-radius: 20px;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sb-chip button {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.08);
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.sb-chip button:hover {
+  background: rgba(0, 0, 0, 0.16);
+}

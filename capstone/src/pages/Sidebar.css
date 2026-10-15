@@ -1,0 +1,289 @@
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  z-index: 10;
+  transition: width 0.2s ease;
+}
+
+/* Masthead */
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 22px 20px;
+  background: var(--surface);
+  border-bottom: 2px solid var(--accent);
+  margin-bottom: 20px;
+}
+
+.sidebar-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-text {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 14px;
+}
+
+.sidebar-nav.sidebar-nav-primary {
+  flex: 1;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.sidebar-link:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.sidebar-link.active {
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+}
+
+/* ---- Floating top-right account trigger ---- */
+
+.topbar-account {
+  position: fixed;
+  top: 20px;
+  right: 32px;
+  z-index: 30;
+}
+
+.topbar-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 12.5px;
+  color: white;
+  cursor: pointer;
+  transition: box-shadow 0.14s ease;
+}
+
+.topbar-avatar:hover {
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.topbar-avatar.role-manager { background: var(--accent); }
+.topbar-avatar.role-hr { background: var(--danger); }
+.topbar-avatar.role-staff { background: var(--success); }
+
+.topbar-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 190px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  overflow: hidden;
+}
+
+.topbar-menu-header {
+  padding: 8px 10px 10px 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.topbar-menu-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-menu-role {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: capitalize;
+}
+
+.topbar-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+}
+
+.topbar-menu-item:hover {
+  background: var(--bg);
+}
+
+.topbar-menu-item.danger {
+  color: var(--danger);
+}
+
+.topbar-menu-item.danger:hover {
+  background: var(--danger-soft);
+}
+
+/* --- Collapsible sidebar --- */
+.sidebar.collapsed .sidebar-brand-text,
+.sidebar.collapsed .sidebar-link span {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  padding: 22px 12px;
+}
+
+.sidebar.collapsed .sidebar-link {
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-section-label {
+  display: none;
+}
+
+/* --- Account section, grouped separately at the bottom --- */
+.sidebar-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 14px;
+}
+
+.sidebar-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  padding: 4px 14px 8px 14px;
+}
+
+.sidebar-collapse-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 14px 16px 14px;
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn {
+  justify-content: center;
+  padding: 9px;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn span {
+  display: none;
+}
+
+.sidebar-collapse-btn svg {
+  transition: transform 0.2s ease;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn svg {
+  transform: rotate(180deg);
+}
+
+.sidebar-collapse-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* Log out uses the danger tone */
+.sidebar-link.danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 64px;
+  }
+  .sidebar-brand {
+    padding: 18px 12px;
+    justify-content: center;
+    border-radius: 0 0 12px 12px;
+  }
+  .sidebar-brand-text,
+  .sidebar-link span {
+    display: none;
+  }
+  .sidebar-nav {
+    padding: 0 10px;
+  }
+  .sidebar-link {
+    justify-content: center;
+  }
+  .topbar-account {
+    top: 14px;
+    right: 14px;
+  }
+  .sidebar-collapse-btn {
+    display: none;
+  }
+  :root {
+    --sidebar-width: 64px;
+  }
+}

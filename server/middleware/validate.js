@@ -1,6 +1,4 @@
-// Usage: router.post("/", validate(loginSchema), asyncHandler(async (req, res) => {...}))
-// On success, req.body is replaced with the parsed (and type-coerced) data.
-// On failure, responds 400 with a readable message — never reaches the route.
+// Validates req.body against a zod schema
 const validate = (schema) => (req, res, next) => {
   const result = schema.safeParse(req.body);
   if (!result.success) {

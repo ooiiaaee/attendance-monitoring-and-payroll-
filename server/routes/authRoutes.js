@@ -2,6 +2,7 @@ const express = require("express");
 const bcrypt = require("bcryptjs");
 const { z } = require("zod");
 const router = express.Router();
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Department = require("../models/Department");
 const generateToken = require("../utils/generateToken");
@@ -55,13 +56,12 @@ const updateMeSchema = z.object({
   email: z.string().trim().email("Must be a valid email"),
 });
 
-// PUBLIC REGISTER — staff log in immediately. Managers are created as
-// unapproved and cannot log in until an HR admin approves them.
+// Public register: staff can log in right away, managers need HR approval
 router.post(
   "/register",
   validate(registerSchema),
   asyncHandler(async (req, res) => {
-    // staffId from the client is deliberately ignored — the server assigns it.
+    // staffId from the client is ignored; the server assigns it
     const { name, email, password, role } = req.body;
 
     if (role === "hr") {
@@ -96,7 +96,7 @@ router.post(
         });
       });
 
-      // No token issued — they can't use the app until an HR admin approves them.
+      // No token until an HR admin approves the account
       return res.status(201).json({
         pendingApproval: true,
         message:
@@ -167,6 +167,33 @@ router.get(
   })
 );
 
+// Verify the current login
+router.get(
+  "/verify",
+  protect,
+  asyncHandler(async (req, res) => {
+    const token = req.headers.authorization.split(" ")[1];
+    const claims = jwt.decode(token) || {};
+    res.json({
+      valid: true,
+      message: "Token and account verified",
+      user: {
+        _id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role,
+        staffId: req.user.staffId || null,
+        approved: req.user.approved,
+        isActive: req.user.isActive,
+      },
+      token: {
+        issuedAt: claims.iat ? new Date(claims.iat * 1000) : null,
+        expiresAt: claims.exp ? new Date(claims.exp * 1000) : null,
+      },
+    });
+  })
+);
+
 // UPDATE own name/email — any logged-in user.
 router.put(
   "/me",
@@ -192,7 +219,7 @@ router.put(
   })
 );
 
-// SET OWN AVATAR — the client sends an already cropped/resized data URL.
+// Set own avatar (client sends a resized data URL)
 router.put(
   "/me/avatar",
   protect,
@@ -207,7 +234,7 @@ router.put(
   })
 );
 
-// REMOVE OWN AVATAR — back to initials.
+// Remove own avatar
 router.delete(
   "/me/avatar",
   protect,
@@ -221,19 +248,16 @@ router.delete(
   })
 );
 
-// CHANGE OWN PASSWORD — any logged-in user, must confirm their current
-// password first. HR can still reset anyone's password if it's forgotten.
-// Bumps tokenVersion so every other device/session is signed out, and hands
-// back a fresh token so this device stays logged in.
+// Change own password; signs out other devices and returns a new token
 router.put(
   "/me/password",
   protect,
-  loginLimiter, // slows down someone guessing the current password with a stolen session
+  loginLimiter, // limit password guessing
   validate(changePasswordSchema),
   asyncHandler(async (req, res) => {
     const { currentPassword, newPassword } = req.body;
 
-    // req.user was loaded without the password hash, so fetch it here.
+    // req.user has no password hash, so fetch it
     const user = await User.findById(req.user._id);
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
@@ -264,20 +288,12 @@ router.get(
   protect,
   authorize("manager", "hr"),
   asyncHandler(async (req, res) => {
-    // isActive:true (as an exact-match filter) would wrongly exclude every
-    // user created before this field existed — Mongoose's schema default
-    // only fills it in when *reading* a document into a JS object, not
-    // retroactively in the database itself, so a legacy document simply has
-    // no isActive field to match against. $ne:false correctly treats
-    // "missing" the same as "active", and only excludes users explicitly
-    // deactivated (which always sets the field to false via .save()).
+    // isActive: { $ne: false } also matches users without the field
     const staffMembers = await User.find({ role: "staff", isActive: { $ne: false } }).select(
       "name email staffId"
     );
 
-    // Each staff member can be enrolled in only one department, so tell the
-    // client who is already taken (managers can't see other managers'
-    // departments, so only the server can know this).
+    // Mark staff who are already in a department
     const activeDepartments = await Department.find({ isActive: { $ne: false } }).select(
       "name staff"
     );
@@ -307,7 +323,7 @@ router.get(
   })
 );
 
-// HR-created accounts are always pre-approved, whatever the role.
+// HR-created accounts are always approved
 router.post(
   "/users",
   protect,
@@ -329,8 +345,7 @@ router.post(
       email,
       password: hashedPassword,
       role,
-      // HR may supply a custom ID (e.g. migrating an existing one); otherwise
-      // staff get an auto-generated STF- ID like everyone else.
+      // HR can supply a custom ID, otherwise one is generated
       staffId: role === "staff" ? staffId || (await generateStaffId()) : null,
       approved: true,
     });
@@ -371,9 +386,7 @@ router.put(
   })
 );
 
-// HR admin declines a pending manager account. A pending manager has never
-// been able to log in, so there is no history to preserve — the account is
-// removed outright (which also frees the email to register again).
+// Decline a pending manager; the account is removed
 router.delete(
   "/users/:id/decline",
   protect,
@@ -402,8 +415,7 @@ router.delete(
   })
 );
 
-// HR admin resets any user's password directly — used when someone has
-// forgotten theirs. (Logged-in users can change their own via PUT /me/password.)
+// HR resets a user's password
 router.put(
   "/users/:id/reset-password",
   protect,
@@ -417,11 +429,7 @@ router.put(
 
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
-    // Invalidates every token issued before this reset — otherwise someone
-    // who still has an old token (e.g. the very account being reset,
-    // possibly because it's suspected to be compromised) could keep using
-    // the app under it for up to its full 7-day lifetime, defeating the
-    // point of the reset.
+    // Invalidate tokens issued before the reset
     user.tokenVersion += 1;
     await user.save();
 
@@ -437,12 +445,7 @@ router.put(
   })
 );
 
-// Soft delete — sets isActive: false rather than removing the document, so
-// every historical reference to this user (department staff arrays,
-// sessions, attendance records, leave requests) stays intact and still
-// resolves correctly when populated. The account can no longer log in
-// (blocked in /login and, for any still-valid token, in the protect
-// middleware) but every past record involving them is unaffected.
+// Soft delete: sets isActive to false and keeps history
 router.delete(
   "/users/:id",
   protect,
@@ -455,9 +458,7 @@ router.delete(
     const target = await User.findById(req.params.id);
     if (!target) return res.status(404).json({ message: "User not found" });
 
-    // HR admin accounts can never be deactivated from the panel, even by
-    // another HR admin. If an HR account genuinely needs to go, do it
-    // manually in the database.
+    // HR admin accounts can't be deactivated from the panel
     if (target.role === "hr") {
       return res.status(403).json({ message: "HR admin accounts cannot be deactivated" });
     }
@@ -481,8 +482,7 @@ router.delete(
   })
 );
 
-// Reverses the above — the account can log in again and reappears in
-// active-staff pickers.
+// Reactivate an account
 router.put(
   "/users/:id/reactivate",
   protect,

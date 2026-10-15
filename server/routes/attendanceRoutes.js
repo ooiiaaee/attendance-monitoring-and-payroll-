@@ -2,8 +2,9 @@ const express = require("express");
 const { z } = require("zod");
 const router = express.Router();
 
-// Absent and excused staff didn't clock in, so they have no check-in time,
-// check-out time or hours.
+// Absent and excused records have no check-in, check-out or hours
+const { defaultMomentFor } = require("../utils/dayKey");
+
 const NO_SHOW = ["absent", "excused"];
 const isNoShow = (status) => NO_SHOW.includes(status);
 
@@ -16,10 +17,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const validate = require("../middleware/validate");
 const { checkinLimiter } = require("../middleware/rateLimiters");
 
-// A check-in further than this from where the session was started gets
-// flagged for the manager to review, rather than being blocked outright —
-// GPS accuracy indoors is unreliable enough that a hard block would cause
-// too many false rejections.
+// Check-ins farther than this from the session are flagged for review, not blocked
 const CHECKIN_RADIUS_METERS = 150;
 
 const checkinSchema = z.object({
@@ -34,14 +32,10 @@ const manualSchema = z.object({
   status: z.enum(["present", "late", "absent", "excused"]),
 });
 
-// Only used internally by the queries below — excludes soft-deleted
-// (corrected/removed) records, same $ne:false reasoning used everywhere
-// else this pattern appears.
+// Excludes soft-deleted records
 const ACTIVE_RECORD = { isActive: { $ne: false } };
 
-// Shared by /manual, /:id/checkout, and DELETE /:id — confirms the
-// requesting manager actually manages the department the session (and
-// therefore the attendance record) belongs to. HR can act on any record.
+// Checks the manager owns the session's department (HR can access any)
 async function assertManagesSession(sessionId, user) {
   const session = await Session.findById(sessionId);
   if (!session) {
@@ -86,8 +80,7 @@ router.post(
       return res.status(403).json({ message: "You are not assigned to this department" });
     }
 
-    // Compare the staff device's location against where the manager started
-    // the session, if both are available.
+    // Compare the device location with the session location
     const sessionHasLocation = session.location?.lat != null && session.location?.lng != null;
     const staffHasLocation = typeof lat === "number" && typeof lng === "number";
 
@@ -115,8 +108,7 @@ router.post(
       staff: req.user._id,
     });
 
-    // Marked absent/excused by a manager, but then actually showed up and
-    // scanned: that's a check-in, not a check-out.
+    // Marked absent/excused but scanned in: counts as a check-in
     if (existing && isNoShow(existing.status)) {
       existing.status = "present";
       existing.timestamp = new Date();
@@ -131,7 +123,7 @@ router.post(
       return res.json({ ...existing.toObject(), type: "checkin" });
     }
 
-    // A second scan of the same session's QR is treated as check-out.
+    // A second scan is a check-out
     if (existing) {
       if (existing.checkOutTime) {
         return res.status(400).json({ message: "You've already checked out for this session" });
@@ -169,15 +161,13 @@ router.post(
   asyncHandler(async (req, res) => {
     const { sessionId, staffId, status } = req.body;
 
-    // This ownership check was previously missing — any manager could mark
-    // attendance for any session, including ones belonging to a department
-    // they don't manage.
-    await assertManagesSession(sessionId, req.user);
+    const session = await assertManagesSession(sessionId, req.user);
 
-    // The check-in time is only set when the record is first created.
-    // Re-clicking a status button used to overwrite it with "now", which
-    // pushed check-in past an existing check-out time and made later
-    // check-out edits fail with "can't be before check-in".
+    // Timestamp for a new check-in
+    const department = session.dayKey ? await Department.findById(session.department) : null;
+    const checkInMoment = session.dayKey ? defaultMomentFor(session.dayKey, department) : new Date();
+
+    // Only set the check-in time when the record is first created
     const existing = await AttendanceRecord.findOne({ session: sessionId, staff: staffId });
     const wasNoShow = existing && isNoShow(existing.status);
 
@@ -187,16 +177,13 @@ router.post(
       update.$set.checkOutTime = null;
       update.$set.hoursWorked = null;
     } else if (wasNoShow) {
-      // Changing absent/excused -> present/late: they have no real check-in
-      // yet, so start a fresh one now (editable with the pencil on the roster).
-      update.$set.timestamp = new Date();
+      // Absent/excused to present/late: start a fresh check-in
+      update.$set.timestamp = checkInMoment;
       update.$set.checkOutTime = null;
       update.$set.hoursWorked = null;
     }
-    // Brand-new record: stamp it (the timestamp field is internal for absent /
-    // excused records — the UI hides it). Never combined with the $set
-    // timestamp above, which only happens when a record already exists.
-    if (!existing) update.$setOnInsert = { timestamp: new Date() };
+    // New record: stamp it
+    if (!existing) update.$setOnInsert = { timestamp: checkInMoment };
 
     const record = await AttendanceRecord.findOneAndUpdate(
       { session: sessionId, staff: staffId },
@@ -217,7 +204,6 @@ router.put(
     const record = await AttendanceRecord.findById(req.params.id);
     if (!record) return res.status(404).json({ message: "Record not found" });
 
-    // Previously missing — see assertManagesSession above.
     await assertManagesSession(record.session, req.user);
 
     if (isNoShow(record.status)) {
@@ -242,9 +228,7 @@ router.put(
   })
 );
 
-// MANAGER/HR corrects check-in and/or check-out times (full date + time).
-// Send checkInTime and/or checkOutTime as ISO strings; checkOutTime may be
-// null to clear it. Hours are recalculated from whatever the result is.
+// MANAGER/HR corrects check-in and/or check-out times (ISO strings; checkOutTime can be null)
 const timesSchema = z
   .object({
     checkInTime: z.string().min(1).optional(),
@@ -306,11 +290,7 @@ router.put(
   })
 );
 
-// MANAGER/HR removes a record — useful for corrections or clearing a test
-// check-in. Soft delete: sets isActive: false instead of removing the
-// document, so it drops out of rosters/history/payroll (see the isActive
-// filters below and in departmentRoutes.js) without leaving any other
-// reference dangling.
+// MANAGER/HR removes a record (soft delete)
 router.delete(
   "/:id",
   protect,
@@ -319,7 +299,6 @@ router.delete(
     const record = await AttendanceRecord.findById(req.params.id);
     if (!record) return res.status(404).json({ message: "Record not found" });
 
-    // Previously missing — see assertManagesSession above.
     await assertManagesSession(record.session, req.user);
 
     record.isActive = false;
@@ -335,9 +314,6 @@ router.get(
   protect,
   authorize("manager", "hr"),
   asyncHandler(async (req, res) => {
-    // Previously this had no ownership check at all, and no role
-    // restriction beyond being logged in — any authenticated user could
-    // pull the full roster for any session in any department.
     await assertManagesSession(req.params.sessionId, req.user);
 
     const records = await AttendanceRecord.find({

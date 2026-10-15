@@ -1,0 +1,210 @@
+.history-table-wrapper {
+  overflow-x: auto;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.history-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-table td {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.history-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.history-table tbody tr:hover {
+  background: var(--bg);
+}
+
+.history-department-name {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.history-date,
+.history-time {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* .status-badge styles are in shared.css */
+
+@media (max-width: 768px) {
+  .page-shell {
+    margin-left: 64px;
+    padding: 24px 20px;
+  }
+}
+
+/* ATTENDANCE ALERTS PAGE */
+
+/* --- Filters card --- */
+.page-shell .alerts-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.page-shell .alerts-control-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.page-shell .alerts-control-field.alerts-threshold-field {
+  flex: 0 0 180px;
+}
+
+/* equalize select and input heights */
+.page-shell .alerts-controls .field-input {
+  box-sizing: border-box;
+  height: 42px;
+}
+
+/* --- Result banner --- */
+.page-shell .alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 20px;
+  padding: 12px 20px;
+  border-radius: 9999px;
+  background: var(--danger-soft, #f3e1de);
+  border: 1px solid rgba(140, 47, 40, 0.18);
+  color: var(--danger, #8c2f28);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.page-shell .alert-banner.ok {
+  background: var(--success-soft, #e4eee1);
+  border-color: rgba(60, 122, 63, 0.2);
+  color: var(--success, #3c7a3f);
+}
+
+/* --- Table card --- */
+.page-shell .alerts-table-wrapper {
+  overflow-x: auto;
+  border-radius: 24px;
+}
+
+.page-shell .alerts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.page-shell .alerts-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 16px;
+  border-bottom: 2px solid rgba(229, 134, 158, 0.3);
+  background: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+}
+
+.page-shell .alerts-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(242, 181, 195, 0.3);
+  vertical-align: middle;
+  color: var(--text-dark);
+}
+
+.page-shell .alerts-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.page-shell .alerts-table tbody tr {
+  transition: background 0.2s ease;
+}
+
+.page-shell .alerts-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* # column — the roster page makes .index-cell sticky; not needed here */
+.page-shell .alerts-table .index-header,
+.page-shell .alerts-table .index-cell {
+  width: 56px;
+  text-align: center;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+.page-shell .alerts-table .index-cell {
+  position: static;
+  background: transparent;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* Rate + the four count columns are centered so the numbers line up */
+.page-shell .alerts-table th:nth-child(n + 3),
+.page-shell .alerts-table td:nth-child(n + 3) {
+  text-align: center;
+}
+
+.page-shell .alerts-table .pill {
+  min-width: 52px;
+  justify-content: center;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.page-shell .alerts-count {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* faded via color alpha (not opacity) so the at-risk row tint behind stays even */
+.page-shell .alerts-count.zero {
+  color: rgba(145, 97, 116, 0.5);
+  font-weight: 500;
+}
+
+/* Rows below the threshold: soft red tint + a red edge on the left */
+.page-shell .alerts-table tbody tr.at-risk td {
+  background: rgba(243, 225, 222, 0.45);
+}
+
+.page-shell .alerts-table tbody tr.at-risk:hover td {
+  background: rgba(243, 225, 222, 0.75);
+}
+
+.page-shell .alerts-table tbody tr.at-risk td:first-child {
+  box-shadow: inset 4px 0 0 var(--danger, #8c2f28);
+}
+
+@media (max-width: 768px) {
+  .page-shell .alerts-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-shell .alerts-control-field.alerts-threshold-field {
+    flex: 1;
+  }
+}

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "check": "node scripts/checkConnection.js",
     "dev": "nodemon server.js"
   },
   "dependencies": {

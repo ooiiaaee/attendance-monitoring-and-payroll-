@@ -1,41 +1,18 @@
-// Cleans up existing department data to match two rules:
-//
-//   1. A staff member belongs to only ONE department.
-//      Anyone enrolled in several active departments is kept in the one where
-//      they have the most attendance history (ties: the oldest department)
-//      and removed from the others. Their attendance records are NOT touched.
-//
-//   2. Department schedules look like real working hours.
-//      Each active department gets a realistic weekly shift, picked from its
-//      name (engineering/IT, sales, support, HR/admin/finance, warehouse...),
-//      with a sensible office default for anything else.
-//
-// Run from the server folder:
-//
-//   node scripts/fixDepartmentData.js                 -> DRY RUN, shows what would change
-//   node scripts/fixDepartmentData.js --apply         -> actually changes the data
-//   node scripts/fixDepartmentData.js --apply --skip-schedules
-//   node scripts/fixDepartmentData.js --apply --skip-enrollment
-//
-// Before --apply changes anything it saves a JSON backup of every department
-// next to this script (backup-departments-<timestamp>.json).
+// Cleans up department data: one department per staff member and realistic schedules.
+// Usage: node scripts/fixDepartmentData.js (dry run), add --apply to save changes
+// Optional flags: --skip-schedules, --skip-enrollment
 
 require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const mongoose = require("mongoose");
 
-// --------------------------------------------------------------------------
-// Pure logic (no database) — exported so it can be tested on its own
-// --------------------------------------------------------------------------
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 
 const blocks = (days, startTime, endTime) => days.map((day) => ({ day, startTime, endTime }));
 
-// First matching preset wins, so the more specific patterns come first.
-// Each schedule block is one workday shift; the server auto-creates that
-// day's attendance session at the block's start time.
+// First matching preset wins, so specific patterns come first
 const SCHEDULE_PRESETS = [
   {
     label: "Warehouse / production — early shift, Mon–Sat 06:00–15:00",
@@ -78,15 +55,7 @@ function describeSchedule(schedule) {
   return schedule.map((b) => `${b.day} ${b.startTime}-${b.endTime}`).join(", ");
 }
 
-/**
- * Decides which department each multiply-enrolled staff member keeps.
- *
- * departments:   [{ _id, name, createdAt, staff: [id, ...] }]  (active only)
- * recordCounts:  Map of "staffId|departmentId" -> number of attendance records
- *
- * Returns { newStaffLists: Map(deptId -> [staffId...]), removals: [...] }
- * Also removes plain duplicates of the same person inside one department.
- */
+// Decides which department each multiply-enrolled staff member keeps
 function planEnrollment(departments, recordCounts) {
   const deptsByStaff = new Map(); // staffId -> [department, ...]
   for (const d of departments) {
@@ -134,9 +103,6 @@ function planEnrollment(departments, recordCounts) {
 
 module.exports = { presetFor, planEnrollment, describeSchedule, SCHEDULE_PRESETS, DEFAULT_PRESET };
 
-// --------------------------------------------------------------------------
-// The actual run
-// --------------------------------------------------------------------------
 
 async function main() {
   const APPLY = process.argv.includes("--apply");
@@ -155,7 +121,7 @@ async function main() {
   const departments = await Department.find({ isActive: { $ne: false } }).lean();
   console.log(`Found ${departments.length} active department(s).\n`);
 
-  // Backup first, whenever we're about to write anything.
+  // Backup before writing
   if (APPLY) {
     const all = await Department.find({}).lean();
     const file = path.join(
@@ -166,7 +132,7 @@ async function main() {
     console.log(`Backup saved: ${file}\n`);
   }
 
-  // ---------------- 1. one department per staff member ----------------
+  // 1. One department per staff member
   if (!SKIP_ENROLLMENT) {
     console.log("=== Enrollment: one department per staff member ===");
 
@@ -200,7 +166,7 @@ async function main() {
       }
     }
 
-    // Also covers an accidental duplicate entry of the same person in one department
+    // Also removes duplicate entries within a department
     const changed = departments.filter((d) => {
       const next = newStaffLists.get(String(d._id));
       const cur = d.staff.map(String);
@@ -217,7 +183,7 @@ async function main() {
     }
   }
 
-  // ---------------- 2. believable schedules ----------------
+  // 2. Department schedules
   if (!SKIP_SCHEDULES) {
     console.log("=== Schedules ===");
     for (const d of departments) {

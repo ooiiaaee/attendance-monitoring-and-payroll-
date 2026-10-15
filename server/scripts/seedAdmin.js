@@ -1,18 +1,11 @@
-// Run this ONCE from your server folder to create the first HR admin account:
-//   node scripts/seedAdmin.js
-//
-// This does NOT go through the public /register endpoint, so it's the only
-// way an HR admin account should ever be created from scratch. After this,
-// use the Admin Panel (logged in as this account) to create any further
-// HR admin or manager accounts.
+// Creates the first HR admin account. Run once: node scripts/seedAdmin.js
 
 require("dotenv").config();
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 
-// CHANGE THESE before running, or better, change the password immediately
-// after your first login.
+// Change these before running
 const HR_ADMIN_NAME = "HR Admin";
 const HR_ADMIN_EMAIL = "hr@company.com";
 const HR_ADMIN_PASSWORD = "ChangeMe123";

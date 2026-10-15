@@ -1,7 +1,16 @@
 const express = require("express");
 const { z } = require("zod");
 const router = express.Router();
+
+// Deactivated accounts are left out of department lists, counts and reports
+const ACTIVE_STAFF = {
+  path: "staff",
+  select: "name email staffId",
+  match: { isActive: { $ne: false } },
+};
+
 const Department = require("../models/Department");
+const User = require("../models/User");
 const Session = require("../models/Session");
 const AttendanceRecord = require("../models/AttendanceRecord");
 const { protect, authorize } = require("../middleware/authMiddleware");
@@ -18,6 +27,11 @@ const scheduleBlockSchema = z.object({
 const createDepartmentSchema = z.object({
   name: z.string().trim().min(1, "Department name is required"),
   schedule: z.array(scheduleBlockSchema).optional(),
+  // HR only: who will manage the new department (managers always manage their own)
+  managerId: z.string().min(1).optional(),
+});
+const assignManagerSchema = z.object({
+  managerId: z.string().min(1, "Choose a manager"),
 });
 
 const updateDepartmentSchema = z.object({
@@ -29,25 +43,63 @@ const enrollSchema = z.object({
   staffId: z.string().min(1, "staffId is required"),
 });
 
-// Only used internally by AttendanceRecord queries below — excludes
-// soft-deleted (corrected/removed) records from every roll-up, same
-// $ne:false reasoning as everywhere else this pattern is used.
+// Excludes soft-deleted records
 const ACTIVE_RECORD = { isActive: { $ne: false } };
 
+// Only an approved, active manager (or HR) can be put in charge
+async function resolveManagerForAssignment(managerId, actingUser) {
+  if (String(managerId) === String(actingUser._id)) return actingUser; // HR managing it themselves
+  let manager = null;
+  try {
+    manager = await User.findById(managerId).select("name email role approved isActive");
+  } catch (e) {
+    manager = null; // not a valid id
+  }
+  const problem =
+    !manager ? "That manager account doesn't exist"
+    : manager.role !== "manager" ? `${manager.name} isn't a manager account`
+    : manager.approved === false ? `${manager.name}'s manager account hasn't been approved yet`
+    : manager.isActive === false ? `${manager.name}'s account is deactivated`
+    : null;
+  if (problem) {
+    const err = new Error(problem);
+    err.statusCode = 400;
+    throw err;
+  }
+  return manager;
+}
+
+// Only HR creates departments and picks the manager
 router.post(
   "/",
   protect,
-  authorize("manager", "hr"),
+  authorize("hr"),
   validate(createDepartmentSchema),
   asyncHandler(async (req, res) => {
-    const { name, schedule } = req.body;
+    const { name, schedule, managerId } = req.body;
+
+    // HR picks the manager, otherwise HR manages it
+    let manager = req.user;
+    if (req.user.role === "hr" && managerId) {
+      manager = await resolveManagerForAssignment(managerId, req.user);
+    }
 
     const newDepartment = await Department.create({
       name,
       schedule,
-      manager: req.user._id,
+      manager: manager._id,
       staff: [],
     });
+
+    if (String(manager._id) !== String(req.user._id)) {
+      await logAudit(
+        req.user._id,
+        "department.assign_manager",
+        "Department",
+        newDepartment._id,
+        `Created "${name}" and assigned ${manager.name} as its manager`
+      );
+    }
 
     res.status(201).json(newDepartment);
   })
@@ -63,13 +115,11 @@ router.get(
     } else if (req.user.role === "staff") {
       query = { staff: req.user._id, isActive: { $ne: false } };
     }
-    // HR gets no isActive filter at all — same as GET /auth/users — so
-    // deactivated departments still show up in the Admin Panel to be
-    // reactivated, they just disappear from managers'/staff's own views.
+    // HR sees deactivated departments too so they can reactivate them
 
     const departments = await Department.find(query)
       .populate("manager", "name email")
-      .populate("staff", "name email staffId");
+      .populate(ACTIVE_STAFF);
 
     res.json(departments);
   })
@@ -81,7 +131,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const department = await Department.findById(req.params.id)
       .populate("manager", "name email")
-      .populate("staff", "name email staffId");
+      .populate(ACTIVE_STAFF);
 
     if (!department) return res.status(404).json({ message: "Department not found" });
     res.json(department);
@@ -94,14 +144,9 @@ router.get(
   protect,
   authorize("manager", "hr"),
   asyncHandler(async (req, res) => {
-    const department = await Department.findById(req.params.id).populate(
-      "staff",
-      "name email staffId"
-    );
+    const department = await Department.findById(req.params.id).populate(ACTIVE_STAFF);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    // This was previously missing — any manager (not just this department's
-    // own) could pull another department's full attendance summary.
     const isOwner = department.manager?.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
@@ -142,17 +187,13 @@ router.get(
   })
 );
 
-// GET session-by-session attendance trend + full history — powers the
-// analytics chart and the "export full history" CSV on the department page.
+// GET attendance trend and full history for the analytics chart and CSV export
 router.get(
   "/:id/analytics",
   protect,
   authorize("manager", "hr"),
   asyncHandler(async (req, res) => {
-    const department = await Department.findById(req.params.id).populate(
-      "staff",
-      "name email staffId"
-    );
+    const department = await Department.findById(req.params.id).populate(ACTIVE_STAFF);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
     const isOwner = department.manager?.toString() === req.user._id.toString();
@@ -191,9 +232,7 @@ router.get(
       };
     });
 
-    // Flat list of every record across every session — the full department
-    // history, not just one session's worth (that's what AttendanceSheet's
-    // CSV export already covers).
+    // Flat list of every record across all sessions
     const fullHistory = records
       .map((r) => {
         const session = sessions.find((s) => s._id.toString() === r.session.toString());
@@ -213,17 +252,13 @@ router.get(
   })
 );
 
-// GET total hours worked per staff member within a date range — a
-// payroll-ready summary, not per-session detail.
+// GET total hours per staff member in a date range
 router.get(
   "/:id/payroll",
   protect,
   authorize("manager", "hr"),
   asyncHandler(async (req, res) => {
-    const department = await Department.findById(req.params.id).populate(
-      "staff",
-      "name email staffId"
-    );
+    const department = await Department.findById(req.params.id).populate(ACTIVE_STAFF);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
     const isOwner = department.manager?.toString() === req.user._id.toString();
@@ -236,9 +271,7 @@ router.get(
       return res.status(400).json({ message: "from and to query params are required (YYYY-MM-DD)" });
     }
 
-    // Parsing a bare "YYYY-MM-DD" string makes JS Date treat it as UTC
-    // midnight, which shifts the boundary by the server's UTC offset.
-    // Appending an explicit local time avoids that.
+    // Add a local time so a bare date isn't parsed as UTC
     const fromDate = new Date(`${from}T00:00:00`);
     const toDate = new Date(`${to}T23:59:59.999`);
 
@@ -261,8 +294,7 @@ router.get(
       const staffRecords = records.filter(
         (r) => r.staff.toString() === staffMember._id.toString()
       );
-      // Absent/excused records never count as hours worked (older records may
-      // still carry hours from before this rule existed).
+      // Absent/excused records don't count as hours
       const workedRecords = staffRecords.filter(
         (r) => r.status !== "absent" && r.status !== "excused"
       );
@@ -291,6 +323,37 @@ router.get(
   })
 );
 
+// HR changes the department's manager; the previous manager loses access
+router.put(
+  "/:id/manager",
+  protect,
+  authorize("hr"),
+  validate(assignManagerSchema),
+  asyncHandler(async (req, res) => {
+    const department = await Department.findById(req.params.id).populate("manager", "name");
+    if (!department) return res.status(404).json({ message: "Department not found" });
+
+    const newManager = await resolveManagerForAssignment(req.body.managerId, req.user);
+    const previousName = department.manager?.name || "nobody";
+
+    department.manager = newManager._id;
+    await department.save();
+
+    await logAudit(
+      req.user._id,
+      "department.assign_manager",
+      "Department",
+      department._id,
+      `Changed manager of "${department.name}" from ${previousName} to ${newManager.name}`
+    );
+
+    const updated = await Department.findById(department._id)
+      .populate("manager", "name email")
+      .populate(ACTIVE_STAFF);
+    res.json(updated);
+  })
+);
+
 router.post(
   "/:id/enroll",
   protect,
@@ -301,8 +364,6 @@ router.post(
     const department = await Department.findById(req.params.id);
     if (!department) return res.status(404).json({ message: "Department not found" });
 
-    // This was previously missing — any manager could enroll staff into any
-    // department, not just their own.
     const isOwner = department.manager?.toString() === req.user._id.toString();
     if (!isOwner && req.user.role !== "hr") {
       return res.status(403).json({ message: "You don't manage this department" });
@@ -316,8 +377,7 @@ router.post(
       return res.status(400).json({ message: "Staff member is already assigned" });
     }
 
-    // A staff member can belong to only ONE department at a time. Departments
-    // that have been deactivated don't count — those staff are free again.
+    // A staff member can only be in one active department
     const otherDepartment = await Department.findOne({
       _id: { $ne: department._id },
       isActive: { $ne: false },
@@ -363,13 +423,7 @@ router.put(
   })
 );
 
-// Soft delete — mirrors the User.isActive pattern. Sets isActive: false
-// instead of removing the document, so every historical reference to this
-// department (sessions, attendance records, leave requests, and the
-// department's own staff/manager assignments) stays intact and still
-// resolves correctly when populated. It just disappears from managers' and
-// staff's own department views (see GET / above) and can't be modified
-// further (see the enroll/update guards above) until reactivated.
+// Soft delete: sets isActive to false and keeps history
 router.delete(
   "/:id",
   protect,
